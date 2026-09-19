@@ -462,6 +462,47 @@ def atomic_roundtrip_yaml_update(path: Union[str, Path], key_path: str, value: A
 _YAML11_AMBIGUOUS_WORDS = frozenset({"y", "n", "yes", "no", "true", "false", "on", "off", "null", "~"})
 
 
+def _roundtrip_unchanged(existing: Any, incoming: Any) -> bool:
+    """True when the round-trip node *existing* already holds *incoming*, so it can stay in place.
+
+    Replacing a node drops every comment anchored inside it — for a list, the comments on its
+    elements' keys. Stricter than ``==``, which equates ``True == 1`` and ``1.0 == 1``; lenient
+    about ruamel's scalar subclasses (``ScalarFloat``, ``HexInt``, ``ScalarBoolean`` for an
+    anchored bool). An ambiguous word counts as unchanged only when already quoted, so the YAML
+    1.1 quoting in ``atomic_roundtrip_yaml_save`` still applies to an unquoted ``off``.
+    """
+    from ruamel.yaml.scalarbool import ScalarBoolean
+    from ruamel.yaml.scalarstring import DoubleQuotedScalarString, SingleQuotedScalarString
+
+    if isinstance(incoming, dict):
+        return (
+            isinstance(existing, dict)
+            and existing.keys() == incoming.keys()
+            and all(_roundtrip_unchanged(existing[k], v) for k, v in incoming.items())
+        )
+    if isinstance(incoming, list):
+        return (
+            isinstance(existing, list)
+            and len(existing) == len(incoming)
+            and all(_roundtrip_unchanged(e, i) for e, i in zip(existing, incoming))
+        )
+    if isinstance(incoming, bool):
+        return isinstance(existing, (bool, ScalarBoolean)) and bool(existing) is incoming
+    if isinstance(incoming, int):
+        return isinstance(existing, int) and not isinstance(existing, (bool, ScalarBoolean)) and existing == incoming
+    if isinstance(incoming, float):
+        return isinstance(existing, float) and existing == incoming
+    if isinstance(incoming, str):
+        if not isinstance(existing, str) or existing != incoming:
+            return False
+        return incoming.lower() not in _YAML11_AMBIGUOUS_WORDS or isinstance(
+            existing, (DoubleQuotedScalarString, SingleQuotedScalarString)
+        )
+    if incoming is None:
+        return existing is None
+    return False
+
+
 def atomic_roundtrip_yaml_save(path: Union[str, Path], new_state: dict) -> None:
     """Persist a full config-state dict while preserving comments and ordering.
 
@@ -488,6 +529,8 @@ def atomic_roundtrip_yaml_save(path: Union[str, Path], new_state: dict) -> None:
                     current = CommentedMap()
                     dst[key] = current
                 _merge(current, value)
+            elif key in dst and _roundtrip_unchanged(dst[key], value):
+                continue  # keep the node, and the comments anchored inside it
             elif isinstance(value, str) and value.lower() in _YAML11_AMBIGUOUS_WORDS:
                 dst[key] = DoubleQuotedScalarString(value)
             else:

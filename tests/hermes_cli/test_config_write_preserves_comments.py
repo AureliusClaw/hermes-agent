@@ -20,10 +20,20 @@ CONFIG_WITH_COMMENTS = textwrap.dedent("""\
       max_tokens: 16384
     agent:
       verify_on_stop: true      # deliberate: unattended work gets checked
+    hooks:
+      pre_llm_call:
+        - command: test.sh
+          # rationale inside a list element
+          timeout: 20
     _config_version: 40
     """)
 
-COMMENTS = ("TOP COMMENT", "must leave write_file in ONE turn", "deliberate: unattended work")
+COMMENTS = (
+    "TOP COMMENT",
+    "must leave write_file in ONE turn",
+    "deliberate: unattended work",
+    "rationale inside a list element",
+)
 
 
 @pytest.fixture

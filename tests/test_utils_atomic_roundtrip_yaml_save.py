@@ -196,6 +196,76 @@ class TestAtomicRoundtripYamlSave:
         result = yaml.safe_load(config_path.read_text(encoding="utf-8"))
         assert result["toolsets"] == ["three"]
 
+    def test_unchanged_list_keeps_element_comments(self, config_path):
+        """Reassigning an equal list swapped out its node and every comment inside it."""
+        config_path.write_text(
+            "hooks:\n"
+            "  pre_llm_call:\n"
+            "    - command: test.sh\n"
+            "      # rationale that must survive\n"
+            "      timeout: 20\n"
+            "      temperature: 0.7\n"
+            "toolsets:\n"
+            "  - file   # inline on a list item\n"
+            "  - web\n"
+            "model: old\n",
+            encoding="utf-8",
+        )
+
+        from utils import atomic_roundtrip_yaml_save
+
+        state = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+        state["model"] = "new"
+        atomic_roundtrip_yaml_save(config_path, state)
+
+        text = config_path.read_text(encoding="utf-8")
+        assert "# rationale that must survive" in text
+        assert "# inline on a list item" in text
+        assert yaml.safe_load(text)["model"] == "new"
+
+    def test_changed_list_element_is_written(self, config_path):
+        config_path.write_text(
+            "hooks:\n"
+            "  pre_llm_call:\n"
+            "    - command: test.sh\n"
+            "      timeout: 20\n",
+            encoding="utf-8",
+        )
+
+        from utils import atomic_roundtrip_yaml_save
+
+        atomic_roundtrip_yaml_save(
+            config_path, {"hooks": {"pre_llm_call": [{"command": "test.sh", "timeout": 30}]}}
+        )
+
+        result = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+        assert result["hooks"]["pre_llm_call"] == [{"command": "test.sh", "timeout": 30}]
+
+    @pytest.mark.parametrize(
+        "on_disk, new_value",
+        [("true", 1), ("1", True), ("1", 1.0), ("1.0", 1)],
+    )
+    def test_scalar_type_change_is_written(self, config_path, on_disk, new_value):
+        """``==`` equates True/1/1.0; the unchanged-node check must not."""
+        config_path.write_text(f"value: {on_disk}\n", encoding="utf-8")
+
+        from utils import atomic_roundtrip_yaml_save
+
+        atomic_roundtrip_yaml_save(config_path, {"value": new_value})
+
+        written = yaml.safe_load(config_path.read_text(encoding="utf-8"))["value"]
+        assert type(written) is type(new_value) and written == new_value
+
+    def test_unquoted_ambiguous_word_is_still_quoted(self, config_path):
+        """An unchanged ``off`` must not skip the YAML 1.1 quoting (it would read back as False)."""
+        config_path.write_text("approvals:\n  mode: off\n", encoding="utf-8")
+
+        from utils import atomic_roundtrip_yaml_save
+
+        atomic_roundtrip_yaml_save(config_path, {"approvals": {"mode": "off"}})
+
+        assert yaml.safe_load(config_path.read_text(encoding="utf-8"))["approvals"]["mode"] == "off"
+
     def test_recurses_into_nested_dicts(self, config_path):
         """Deep mutations target the matching subtree, not the whole parent.
 
